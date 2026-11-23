@@ -26,6 +26,7 @@ jobs:
   deploy:
     name: Plan and optionally apply dev
     runs-on: ubuntu-latest
+    environment: DEV
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"

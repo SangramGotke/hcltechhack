@@ -3,7 +3,7 @@
 ## Workflow overview
 
 - `.github/workflows/terraform-pr.yml` runs for pull requests targeting `main` when `terraform/**` changes. It checks formatting, initializes dev and bootstrap with `-backend=false`, and validates both. It attempts a dev plan without refreshing cloud state; if the Google provider requires credentials, the workflow reports that limitation. Pull requests never authenticate to GCP or apply changes.
-- `.github/workflows/terraform-deploy.yml` runs on pushes to `main` that change `terraform/**`, or by manual `workflow_dispatch`. It deploys only `terraform/environments/dev`: authenticates with WIF, checks the GCS backend bucket, initializes remote state, validates, and prints the plan.
+- `.github/workflows/terraform-deploy.yml` runs on pushes to `main` that change `terraform/**`, or by manual `workflow_dispatch`. Its `DEV` GitHub Environment requires configured reviewers to approve every run, including push-triggered plan-only runs. After approval, it deploys only `terraform/environments/dev`: authenticates with WIF, checks the GCS backend bucket, initializes remote state, validates, and prints the plan.
 - `.github/workflows/terraform-destroy.yml` is manual-only and targets dev. It defaults to a destroy plan without applying; actual destruction requires the `destroy` input and the exact `destroy-dev` confirmation.
 - `.github/workflows/terraform-bootstrap.yml` is manual-only. Because the state bucket already exists and `terraform/bootstrap` was empty, this workflow uses a read-only Terraform data source to verify the bucket. It does not create a bucket or other infrastructure.
 
