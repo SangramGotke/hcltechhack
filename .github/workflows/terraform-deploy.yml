@@ -1,0 +1,98 @@
+name: Terraform dev deployment
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "terraform/**"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply the reviewed plan after it is displayed in this run"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Plan and optionally apply dev
+    runs-on: ubuntu-latest
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+    defaults:
+      run:
+        working-directory: terraform/environments/dev
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Enforce WIF main-branch restriction
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::GCP deployment is allowed only from refs/heads/main."
+            exit 1
+          fi
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.5
+          terraform_wrapper: false
+
+      - name: Check Terraform formatting
+        working-directory: .
+        run: terraform fmt -check -recursive terraform
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify the remote state bucket exists and is accessible
+        shell: bash
+        run: |
+          bucket="$(sed -nE 's/^[[:space:]]*bucket[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' backend.hcl | head -n 1)"
+          if [ -z "$bucket" ]; then
+            echo "::error::terraform/environments/dev/backend.hcl must specify the GCS state bucket."
+            exit 1
+          fi
+
+          if ! gcloud storage buckets describe "gs://${bucket}" --format="value(name)" >/dev/null 2>&1; then
+            echo "::error::GCS state bucket gs://${bucket} does not exist or is inaccessible. Complete bootstrap or verify the bucket and service-account permissions before deploying."
+            exit 1
+          fi
+
+      - name: Initialize the GCS backend
+        run: terraform init -input=false -lockfile=readonly -backend-config=backend.hcl
+
+      - name: Validate configuration
+        run: terraform validate
+
+      - name: Create Terraform plan
+        run: terraform plan -input=false -lock-timeout=5m -out=tfplan
+
+      - name: Display Terraform plan
+        run: terraform show -no-color tfplan
+
+      - name: Apply the displayed plan
+        if: github.event_name == 'workflow_dispatch' && inputs.apply
+        run: terraform apply -input=false -lock-timeout=5m tfplan
+
+      - name: Remove local plan file
+        if: always()
+        run: rm -f tfplan

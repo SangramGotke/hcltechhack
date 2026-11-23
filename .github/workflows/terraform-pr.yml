@@ -1,0 +1,73 @@
+name: Terraform PR validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "terraform/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Format, initialize, and validate Terraform
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        root:
+          - terraform/environments/dev
+          - terraform/bootstrap
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.5
+          terraform_wrapper: false
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive terraform
+
+      - name: Initialize without a remote backend
+        working-directory: ${{ matrix.root }}
+        run: terraform init -backend=false -input=false -lockfile=readonly
+
+      - name: Validate configuration
+        working-directory: ${{ matrix.root }}
+        run: terraform validate
+
+      - name: Attempt credential-free dev plan
+        if: matrix.root == 'terraform/environments/dev'
+        working-directory: ${{ matrix.root }}
+        shell: bash
+        run: |
+          set +e
+          terraform plan \
+            -input=false \
+            -lock=false \
+            -refresh=false \
+            > "$RUNNER_TEMP/dev-plan.log" 2>&1
+          status=$?
+          set -e
+
+          cat "$RUNNER_TEMP/dev-plan.log"
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+
+          if grep -Eiq 'default credentials|application default credentials|oauth2.*(credential|token)|could not find.*credential' "$RUNNER_TEMP/dev-plan.log"; then
+            echo "::notice::Terraform validation passed; the dev plan needs GCP credentials and was not run in this pull request."
+            {
+              echo "### Dev plan not available in pull requests"
+              echo "Terraform validation passed. The Google provider needs GCP credentials to plan this configuration; PR workflows intentionally do not authenticate to GCP."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          exit "$status"

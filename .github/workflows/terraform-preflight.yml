@@ -1,0 +1,120 @@
+name: Terraform manual preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Terraform roots to validate
+        required: true
+        type: choice
+        options:
+          - all
+          - dev
+          - bootstrap
+        default: all
+      include_dev_plan:
+        description: Attempt a dev plan without GCP credentials
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  formatting:
+    name: Check formatting and report incomplete roots
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.5
+          terraform_wrapper: false
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive terraform
+
+      - name: Report empty environment roots
+        shell: bash
+        run: |
+          for root in terraform/environments/stage terraform/environments/prod; do
+            if ! find "$root" -maxdepth 1 -type f -name '*.tf' -print -quit | grep -q .; then
+              echo "::notice::$root has no Terraform configuration and is skipped."
+              echo "- \`$root\` has no Terraform configuration and was skipped." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+  validate:
+    name: Validate ${{ matrix.root_name }}
+    needs: formatting
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - root_name: dev
+            root_path: terraform/environments/dev
+          - root_name: bootstrap
+            root_path: terraform/bootstrap
+    if: inputs.scope == 'all' || inputs.scope == matrix.root_name
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.5
+          terraform_wrapper: false
+
+      - name: Initialize without a remote backend
+        working-directory: ${{ matrix.root_path }}
+        run: terraform init -backend=false -input=false -lockfile=readonly
+
+      - name: Validate configuration
+        working-directory: ${{ matrix.root_path }}
+        run: terraform validate
+
+      - name: Attempt credential-free dev plan
+        if: matrix.root_name == 'dev' && inputs.include_dev_plan
+        working-directory: ${{ matrix.root_path }}
+        shell: bash
+        run: |
+          set +e
+          terraform plan \
+            -input=false \
+            -lock=false \
+            -refresh=false \
+            > "$RUNNER_TEMP/dev-plan.log" 2>&1
+          status=$?
+          set -e
+
+          cat "$RUNNER_TEMP/dev-plan.log"
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+
+          if grep -Eiq 'default credentials|application default credentials|oauth2.*(credential|token)|could not find.*credential' "$RUNNER_TEMP/dev-plan.log"; then
+            echo "::notice::Dev plan requires GCP credentials. No GCP authentication is performed by this preflight workflow."
+            {
+              echo "### Dev plan not available"
+              echo "Terraform validation passed. A GCP-authenticated plan is not run here because this workflow must also work on pre-merge branches under the main-only WIF restriction."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          exit "$status"
+
+      - name: Explain bootstrap plan limitation
+        if: matrix.root_name == 'bootstrap'
+        run: |
+          echo "Bootstrap validation completed. Its data source reads the GCS bucket, so planning it requires GCP credentials and is intentionally omitted from this unauthenticated preflight."
+          echo "Bootstrap plan was omitted because its GCS data source requires GCP credentials." >> "$GITHUB_STEP_SUMMARY"
