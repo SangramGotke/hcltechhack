@@ -64,16 +64,51 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Verify the remote state bucket exists and is accessible
+        working-directory: terraform/environments/dev
         shell: bash
         run: |
-          bucket="$(sed -nE 's/^[[:space:]]*bucket[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' backend.hcl | head -n 1)"
-          if [ -z "$bucket" ]; then
+          backend_config="backend.hcl"
+          bucket=""
+          bucket_re='^[[:space:]]*bucket[[:space:]]*=[[:space:]]*"([^"]*)"[[:space:]]*(#.*)?$'
+
+          if [[ ! -f "$backend_config" ]]; then
+            echo "::error::terraform/environments/dev/backend.hcl was not found."
+            exit 1
+          fi
+
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ "$line" =~ $bucket_re ]]; then
+              bucket="${BASH_REMATCH[1]}"
+              break
+            fi
+          done < "$backend_config"
+
+          if [[ -z "$bucket" ]]; then
             echo "::error::terraform/environments/dev/backend.hcl must specify the GCS state bucket."
             exit 1
           fi
 
-          if ! gcloud storage buckets describe "gs://${bucket}" --format="value(name)" >/dev/null 2>&1; then
-            echo "::error::GCS state bucket gs://${bucket} does not exist or is inaccessible. Complete bootstrap or verify the bucket and service-account permissions before deploying."
+          echo "Checking GCS state bucket: ${bucket}"
+
+          set +e
+          bucket_check="$(gcloud storage buckets describe "gs://${bucket}" --format="value(name)" 2>&1)"
+          bucket_check_status=$?
+          set -e
+
+          if [ "$bucket_check_status" -ne 0 ]; then
+            printf '%s\n' "$bucket_check" >&2
+            if grep -Eiq '403|forbidden|permission denied|storage\.buckets\.get' <<< "$bucket_check"; then
+              echo "::error::WIF authentication succeeded, but the service account cannot read metadata for gs://${bucket}. Grant bucket-scoped storage.buckets.get access and state/lock object access."
+            elif grep -Eiq '404|not found|does not exist' <<< "$bucket_check"; then
+              echo "::error::GCS state bucket gs://${bucket} was not found. Verify the bucket name and complete bootstrap before deploying."
+            else
+              echo "::error::Could not verify gs://${bucket}. Review the gcloud diagnostic above and check bucket existence and service-account access."
+            fi
+            exit 1
+          fi
+
+          if [ "$bucket_check" != "$bucket" ]; then
+            echo "::error::gcloud returned an unexpected bucket name while checking gs://${bucket}."
             exit 1
           fi
 

@@ -15,7 +15,7 @@ Create these **repository variables** (not secrets):
 
 Both deployment workflows use `google-github-actions/auth@v3` with GitHub's OIDC token. No service-account key is stored in the repository. The WIF provider is restricted to repository ID `1465666026` and `refs/heads/main`; the deploy and bootstrap workflows enforce that branch before authenticating. PR validation has only `contents: read` permission and does not request an OIDC token.
 
-The service account must already have the required permissions; workflows do not grant IAM roles. At minimum, it needs access to read/write/delete Terraform state and lock objects in the GCS bucket, read the bucket metadata, and the permissions required to create the dev VPC, subnet, GKE cluster/node pool, and enable the required Google APIs. Use narrowly scoped roles and grant bucket access on the state bucket rather than project-wide Owner access.
+The service account must already have the required permissions; workflows do not grant IAM roles. At minimum, it needs bucket-scoped GCS metadata access (`storage.buckets.get`, for example via `roles/storage.legacyBucketReader`), state/lock object access (for example `roles/storage.objectAdmin`), and the permissions required to create the dev VPC, subnet, GKE cluster/node pool, and enable the required Google APIs. Use narrowly scoped roles and grant bucket access on the state bucket rather than project-wide Owner access.
 
 ## State backend and bootstrap
 
