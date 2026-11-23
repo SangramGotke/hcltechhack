@@ -14,12 +14,6 @@ jobs:
   validate:
     name: Format, initialize, and validate Terraform
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        root:
-          - terraform/environments/dev
-          - terraform/bootstrap
 
     steps:
       - name: Check out repository
@@ -34,17 +28,16 @@ jobs:
       - name: Check Terraform formatting
         run: terraform fmt -check -recursive terraform
 
-      - name: Initialize without a remote backend
-        working-directory: ${{ matrix.root }}
+      - name: Initialize dev without a remote backend
+        working-directory: terraform/environments/dev
         run: terraform init -backend=false -input=false -lockfile=readonly
 
-      - name: Validate configuration
-        working-directory: ${{ matrix.root }}
+      - name: Validate dev configuration
+        working-directory: terraform/environments/dev
         run: terraform validate
 
       - name: Attempt credential-free dev plan
-        if: matrix.root == 'terraform/environments/dev'
-        working-directory: ${{ matrix.root }}
+        working-directory: terraform/environments/dev
         shell: bash
         run: |
           set +e
@@ -71,3 +64,16 @@ jobs:
           fi
 
           exit "$status"
+
+      - name: Initialize bootstrap with local state
+        working-directory: terraform/bootstrap
+        run: terraform init -backend=false -input=false -lockfile=readonly
+
+      - name: Validate bootstrap configuration
+        working-directory: terraform/bootstrap
+        run: terraform validate
+
+      - name: Explain bootstrap plan limitation
+        run: |
+          echo "Bootstrap validation completed. Its data source reads the GCS bucket, so planning it requires GCP credentials and is intentionally omitted from this unauthenticated PR workflow."
+          echo "Bootstrap plan was omitted because its GCS data source requires GCP credentials." >> "$GITHUB_STEP_SUMMARY"

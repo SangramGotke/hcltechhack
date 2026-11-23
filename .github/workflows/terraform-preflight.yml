@@ -53,18 +53,9 @@ jobs:
           done
 
   validate:
-    name: Validate ${{ matrix.root_name }}
+    name: Validate selected Terraform roots
     needs: formatting
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - root_name: dev
-            root_path: terraform/environments/dev
-          - root_name: bootstrap
-            root_path: terraform/bootstrap
-    if: inputs.scope == 'all' || inputs.scope == matrix.root_name
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -75,17 +66,19 @@ jobs:
           terraform_version: 1.14.5
           terraform_wrapper: false
 
-      - name: Initialize without a remote backend
-        working-directory: ${{ matrix.root_path }}
+      - name: Initialize dev without a remote backend
+        if: inputs.scope == 'all' || inputs.scope == 'dev'
+        working-directory: terraform/environments/dev
         run: terraform init -backend=false -input=false -lockfile=readonly
 
-      - name: Validate configuration
-        working-directory: ${{ matrix.root_path }}
+      - name: Validate dev configuration
+        if: inputs.scope == 'all' || inputs.scope == 'dev'
+        working-directory: terraform/environments/dev
         run: terraform validate
 
       - name: Attempt credential-free dev plan
-        if: matrix.root_name == 'dev' && inputs.include_dev_plan
-        working-directory: ${{ matrix.root_path }}
+        if: (inputs.scope == 'all' || inputs.scope == 'dev') && inputs.include_dev_plan
+        working-directory: terraform/environments/dev
         shell: bash
         run: |
           set +e
@@ -113,8 +106,18 @@ jobs:
 
           exit "$status"
 
+      - name: Initialize bootstrap with local state
+        if: inputs.scope == 'all' || inputs.scope == 'bootstrap'
+        working-directory: terraform/bootstrap
+        run: terraform init -backend=false -input=false -lockfile=readonly
+
+      - name: Validate bootstrap configuration
+        if: inputs.scope == 'all' || inputs.scope == 'bootstrap'
+        working-directory: terraform/bootstrap
+        run: terraform validate
+
       - name: Explain bootstrap plan limitation
-        if: matrix.root_name == 'bootstrap'
+        if: inputs.scope == 'all' || inputs.scope == 'bootstrap'
         run: |
           echo "Bootstrap validation completed. Its data source reads the GCS bucket, so planning it requires GCP credentials and is intentionally omitted from this unauthenticated preflight."
           echo "Bootstrap plan was omitted because its GCS data source requires GCP credentials." >> "$GITHUB_STEP_SUMMARY"
